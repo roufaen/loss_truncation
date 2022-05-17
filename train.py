@@ -1,4 +1,4 @@
-import torch, jieba, os, re
+import torch, os, re
 import bmtrain as bmt
 import numpy as np
 
@@ -25,7 +25,7 @@ class FineTuneCPM:
         self.model = CPM1.from_pretrained(Config.model_path)
         bmt.synchronize()
         self.optimizer = bmt.optim.AdamOffloadOptimizer(self.model.parameters())
-        self.lr_scheduler = bmt.lr_scheduler.Noam(self.optimizer, start_lr=5e-4, warmup_iter=100, end_iter=None)
+        self.lr_scheduler = bmt.lr_scheduler.Noam(self.optimizer, start_lr=Config.start_lr, warmup_iter=100, end_iter=None)
         bmt.synchronize()
 
     def prepare_dataset(self):
@@ -47,10 +47,10 @@ class FineTuneCPM:
             "valid": DistributedDataLoader(self.datasets['valid'], batch_size=1, shuffle=False),
         }
 
-        for epoch_num in range(5):
+        for epoch_num in range(4):
             self.model.train()
             truncator.reset()
-            bmt.print_rank('Train epoch ' + str(epoch_num) + '.')
+            bmt.print_rank(f'Training epoch {epoch_num}.')
             for iter_num, [input_ids, labels] in enumerate(dataloader['train']):
                 self.optimizer.zero_grad()
                 input_ids, labels = input_ids.cuda(), labels.cuda()
@@ -73,12 +73,12 @@ class FineTuneCPM:
                 if (iter_num + 1) % Config.save_steps == 0:
                     bmt.save(self.model, Config.save_model_dir + 'training_' + str(epoch_num) + '_' + str(iter_num) + '.pt')
                 if (iter_num + 1) % Config.train_log_steps == 0:
-                    bmt.print_rank('Traing iter ' + str(iter_num + 1) + '.')
+                    bmt.print_rank(f'Training iter {iter_num + 1}.')
 
             self.model.eval()
             with torch.no_grad():
                 inputs, outputs, refs = list(), list(), list()
-                bmt.print_rank('Validate epoch ' + str(epoch_num) + '.')
+                bmt.print_rank(f'Validate epoch {epoch_num}.')
                 for iter_num, [input_ids, labels] in enumerate(dataloader['valid']):
                     input_ids, labels = input_ids.cuda(), labels.cuda()
                     preds = torch.IntTensor([1]).cuda()
@@ -90,14 +90,16 @@ class FineTuneCPM:
                         span = torch.zeros_like(context)
                         logit = self.model(input, length, context, span)
                         logit = logit.squeeze(0)[-1, :].float()  # (vocab_size)
-                        pred = torch.argmax(logit)
-                        preds = torch.cat((preds, pred.unsqueeze(0)), dim=0)
+                        pred = torch.argmax(logit).unsqueeze(0)
+                        if preds[-1] == self.tokenizer.pad_id or preds[-1] == self.tokenizer.eod_id:
+                            pred = torch.IntTensor([self.tokenizer.pad_id]).cuda()
+                        preds = torch.cat((preds, pred), dim=0)
 
                     inputs.append(self.tokenizer.decode(input_ids.squeeze(0).cpu().tolist()) + '\n')
                     outputs.append(self.tokenizer.decode(preds.cpu().tolist()) + '\n')
                     refs.append(self.tokenizer.decode(labels.squeeze(0).cpu().tolist()) + '\n')
                     if (iter_num + 1) % Config.validation_log_steps == 0:
-                        bmt.print_rank('Validating iter ' + str(iter_num + 1) + '.')
+                        bmt.print_rank(f'Validating iter {iter_num + 1}.')
 
                 with open(Config.output_dir + str(bmt.rank()) + '_' + str(epoch_num) + '_inputs.txt', 'w') as fp:
                     fp.writelines(inputs)
@@ -106,23 +108,37 @@ class FineTuneCPM:
                 with open(Config.output_dir + str(bmt.rank()) + '_' + str(epoch_num) + '_refs.txt', 'w') as fp:
                     fp.writelines(refs)
 
-                global_metrics = bmt.sum_loss(torch.Tensor([self.rouge_score(outputs, refs)]).cuda(), method='sum').item()
-                if global_metrics > best_metrics:
-                    bmt.print_rank('Update metrics:' + str(best_metrics) + ' -> ' + str(global_metrics) + '.')
-                    best_metrics = global_metrics
+                rouge_1, rouge_2, rouge_l = self.rouge_score(outputs, refs)
+                global_rouge_1 = bmt.sum_loss(torch.Tensor([rouge_1]).cuda()).item()
+                global_rouge_2 = bmt.sum_loss(torch.Tensor([rouge_2]).cuda()).item()
+                global_rouge_l = bmt.sum_loss(torch.Tensor([rouge_l]).cuda()).item()
+                bmt.print_rank(f'Rouge score: rouge-1 {global_rouge_1}, rouge-2 {global_rouge_2}, rouge-l {global_rouge_l}.')
+                if global_rouge_1 + global_rouge_2 + global_rouge_l > best_metrics:
+                    bmt.print_rank(f'Update metrics: {best_metrics} -> {global_rouge_1 + global_rouge_2 + global_rouge_l}.')
+                    best_metrics = global_rouge_1 + global_rouge_2 + global_rouge_l
                     bmt.save(self.model, Config.save_model_dir + 'best_' + str(epoch_num) + '.pt')
 
     def rouge_score(self, preds, refs):
-        res = list()
+        rouge_1, rouge_2, rouge_l = list(), list(), list()
         for pred, ref in zip(preds, refs):
             pred = re.sub('<\w+>', '', pred)
             ref = re.sub('<\w+>', '', ref)
-            pred = " ".join([w for w in jieba.cut("".join(pred.strip()))])
-            ref = " ".join([w for w in jieba.cut("".join(ref.strip()))])
-            score = Rouge().get_scores(refs=ref, hyps=pred)[0]
-            res.extend([score['rouge-1']['f'], score['rouge-2']['f'], score['rouge-l']['f']])
+            pred = ' '.join(pred)
+            ref = ' '.join(ref)
 
-        return np.mean(res) * 3
+            if len(ref) == 0 and len(pred) == 0:
+                continue
+            elif len(pred) == 0:
+                rouge_1.append(0)
+                rouge_2.append(0)
+                rouge_l.append(0)
+            else:
+                score = Rouge().get_scores(refs=ref, hyps=pred)[0]
+                rouge_1.append(score['rouge-1']['f'])
+                rouge_2.append(score['rouge-2']['f'])
+                rouge_l.append(score['rouge-l']['f'])
+
+        return np.array(rouge_1).mean(), np.array(rouge_2).mean(), np.array(rouge_l).mean()
 
 
 if __name__ == "__main__":

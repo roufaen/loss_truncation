@@ -13,7 +13,7 @@ class LcstsDataset(torch.utils.data.Dataset):
         with open(file, 'r') as fp:
             for i, line in enumerate(fp):
                 if (i + 1) % 10000 == 0:
-                    bmt.print_rank('Loading dataset number ' + str(i + 1) + '.')
+                    bmt.print_rank(f'Loading dataset number {i + 1}.')
                 line_json = json.loads(line)
                 input_ids = ([1] + tokenizer.encode(line_json['text']) + [tokenizer.eod_id] + [tokenizer.pad_id] * Config.max_source_len)[:Config.max_source_len]
                 labels = ([1] + tokenizer.encode(line_json['summary']) + [tokenizer.eod_id] + [tokenizer.pad_id] * Config.max_target_len)[:Config.max_target_len]
