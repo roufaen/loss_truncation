@@ -6,7 +6,7 @@ class Config:
     # model
     max_source_len = 150
     max_target_len = 35
-    percentile = 0.2
+    percentile = 0.1
 
     # training
     # train_size = 10000
@@ -17,11 +17,11 @@ class Config:
     save_steps = 2000
     train_log_steps = 1000
     validation_log_steps = 1000
-    loss_truncation = False
+    loss_truncation = True
 
     # directory
     base_dir = '/data/disk2/private/roufaen/'
-    output_dir = base_dir + 'loss_truncation/outputs_no/'
-    save_model_dir = base_dir + 'loss_truncation/saved_models_no/'
+    output_dir = base_dir + 'loss_truncation/outputs_0.1/'
+    save_model_dir = base_dir + 'loss_truncation/saved_models_0.1/'
     model_path = base_dir + 'models/cpm1-small/'
     data_path = base_dir + 'datasets/lcsts/'
