@@ -1,4 +1,4 @@
-/outputs/
-/saved_models/
+/outputs*/
+/saved_models*/
 *__pycache__/
 *.png

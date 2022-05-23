@@ -24,8 +24,8 @@ class FineTuneCPM:
         self.tokenizer = CPM1Tokenizer.from_pretrained(Config.model_path)
         self.model = CPM1.from_pretrained(Config.model_path)
         bmt.synchronize()
-        self.optimizer = bmt.optim.AdamOffloadOptimizer(self.model.parameters())
-        self.lr_scheduler = bmt.lr_scheduler.Noam(self.optimizer, start_lr=Config.start_lr, warmup_iter=100, end_iter=None)
+        self.optimizer = bmt.optim.AdamOffloadOptimizer(self.model.parameters(), scale=1048576, weight_decay=1e-3)
+        self.lr_scheduler = bmt.lr_scheduler.Noam(self.optimizer, start_lr=Config.start_lr, warmup_iter=1000, end_iter=None)
         bmt.synchronize()
 
     def prepare_dataset(self):
@@ -36,7 +36,6 @@ class FineTuneCPM:
 
     def load_model(self, name):
         bmt.load(self.model, Config.save_model_dir + name + '.pt')
-        self.model.load_state_dict(torch.load(Config.save_model_dir + name + '.pt'), strict=True)
 
     def train(self):
         loss_func = bmt.loss.FusedCrossEntropy(reduction='none')
@@ -66,6 +65,7 @@ class FineTuneCPM:
                 if Config.loss_truncation == True:
                     loss = truncator.truncate_loss(loss)
                 loss = loss.mean()
+                loss = self.optimizer.loss_scale(loss)
                 loss.backward()
                 bmt.optim.clip_grad_norm(self.optimizer.param_groups, Config.max_grad_norm, scale=self.optimizer.scale)
                 bmt.optim_step(self.optimizer, self.lr_scheduler)
