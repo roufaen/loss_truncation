@@ -6,7 +6,7 @@ class Config:
     # model
     max_source_len = 150
     max_target_len = 35
-    percentile = 0.2
+    percentile = 0.3
 
     # training
     # train_size = 10000
@@ -24,4 +24,4 @@ class Config:
     output_dir = base_dir + 'loss_truncation/outputs_0.3/'
     save_model_dir = base_dir + 'loss_truncation/saved_models_0.3/'
     model_path = base_dir + 'models/cpm1-small/'
-    data_path = base_dir + 'datasets/lcsts/'
+    data_path = base_dir + 'datasets/LCSTS/'
